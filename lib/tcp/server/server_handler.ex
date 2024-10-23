@@ -8,7 +8,8 @@ defmodule Modbux.Tcp.Server.Handler do
   use GenServer, restart: :temporary
   require Logger
 
-  defstruct model_pid: nil,
+  defstruct model_handler: nil,
+            model_pid: nil,
             parent_pid: nil,
             socket: nil
 
@@ -17,8 +18,12 @@ defmodule Modbux.Tcp.Server.Handler do
     GenServer.start_link(__MODULE__, [socket, model_pid, parent_pid])
   end
 
+  def init([socket, {model_handler, model_pid}, parent_pid]) do
+    {:ok, %Handler{model_handler: model_handler, model_pid: model_pid, socket: socket, parent_pid: parent_pid}}
+  end
+
   def init([socket, model_pid, parent_pid]) do
-    {:ok, %Handler{model_pid: model_pid, socket: socket, parent_pid: parent_pid}}
+    {:ok, %Handler{model_handler: Shared, model_pid: model_pid, socket: socket, parent_pid: parent_pid}}
   end
 
   def handle_info({:tcp, socket, data}, state) do
@@ -26,7 +31,7 @@ defmodule Modbux.Tcp.Server.Handler do
     {cmd, transid} = Tcp.parse_req(data)
     Logger.debug("(#{__MODULE__}) Received Modbux request: #{inspect({cmd, transid})}")
 
-    case Shared.apply(state.model_pid, cmd) do
+    case state.model_handler.apply(state.model_pid, cmd) do
       {:ok, values} ->
         Logger.debug("(#{__MODULE__}) msg send")
         resp = Tcp.pack_res(cmd, values, transid)

@@ -124,10 +124,13 @@ defmodule Modbux.Rtu.Slave do
   def init({params, parent_pid}) do
     parent_pid = if Keyword.get(params, :active, false), do: parent_pid
     tty = Keyword.fetch!(params, :tty)
-    model = Keyword.fetch!(params, :model)
+    {model_handler, model_opts} = case Keyword.fetch!(params, :model) do
+      {model_handler, model_opts} -> {model_handler, model_opts}
+      model -> {Shared, model: model}
+    end
     Logger.debug("(#{__MODULE__}) Starting Modbux Slave at \"#{tty}\"")
     uart_opts = Keyword.get(params, :uart_opts, speed: @speed, rx_framing_timeout: @timeout)
-    {:ok, model_pid} = Shared.start_link(model: model)
+    {:ok, model_pid} = model_handler.start_link(model_opts)
     {:ok, u_pid} = UART.start_link()
     UART.open(u_pid, tty, [framing: {Framer, behavior: :slave}] ++ uart_opts)
 
@@ -169,7 +172,7 @@ defmodule Modbux.Rtu.Slave do
   end
 
   def handle_call(:get_db, _from, state) do
-    {:reply, Shared.state(state.model_pid), state}
+    {:reply, state.model_handler.state(state.model_pid), state}
   end
 
   def handle_call({:raw_write, data}, _from, state) do
@@ -206,7 +209,7 @@ defmodule Modbux.Rtu.Slave do
     cmd = Rtu.parse_req(modbus_frame)
     Logger.debug("(#{__MODULE__}) Received Modbux request: #{inspect(cmd)}")
 
-    case Shared.apply(state.model_pid, cmd) do
+    case state.model_handler.apply(state.model_pid, cmd) do
       {:ok, values} ->
         response = Rtu.pack_res(cmd, values)
         if !is_nil(state.parent_pid), do: notify(state.parent_pid, nil, cmd)
@@ -236,7 +239,7 @@ defmodule Modbux.Rtu.Slave do
 
   defp valid_slave_id?(state, <<slave_id, _b_tail::binary>>) do
     state.model_pid
-    |> Shared.state()
+    |> state.model_handler.state()
     |> Map.has_key?(slave_id)
   end
 

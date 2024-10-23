@@ -11,6 +11,7 @@ defmodule Modbux.Tcp.Server do
   @to :infinity
 
   defstruct ip: nil,
+            model_handler: nil,
             model_pid: nil,
             tcp_port: nil,
             timeout: nil,
@@ -109,13 +110,17 @@ defmodule Modbux.Tcp.Server do
     port = Keyword.get(params, :port, @port)
     timeout = Keyword.get(params, :timeout, @to)
     parent_pid = if Keyword.get(params, :active, false), do: parent_pid
-    model = Keyword.fetch!(params, :model)
-    {:ok, model_pid} = Shared.start_link(model: model)
+    {model_handler, model_opts} = case Keyword.fetch!(params, :model) do
+      {model_handler, model_opts} -> {model_handler, model_opts}
+      model -> {Shared, model: model}
+    end
+    {:ok, model_pid} = model_handler.start_link(model_opts)
     sup_opts = Keyword.get(params, :sup_opts, [])
     {:ok, sup_pid} = Server.Supervisor.start_link(sup_opts)
 
     state = %Server{
       tcp_port: port,
+      model_handler: model_handler,
       model_pid: model_pid,
       timeout: timeout,
       parent_pid: parent_pid,
@@ -134,7 +139,7 @@ defmodule Modbux.Tcp.Server do
 
   def handle_call({:update, request}, _from, state) do
     res =
-      case Shared.apply(state.model_pid, request) do
+      case state.model_handler.apply(state.model_pid, request) do
         {:ok, values} ->
           Logger.debug("(#{__MODULE__}) DB request: #{inspect(request)}, #{inspect(values)}")
           values
@@ -151,7 +156,7 @@ defmodule Modbux.Tcp.Server do
   end
 
   def handle_call(:get_db, _from, state) do
-    {:reply, Shared.state(state.model_pid), state}
+    {:reply, state.model_handler.state(state.model_pid), state}
   end
 
   def handle_continue(:setup, state) do
@@ -194,7 +199,7 @@ defmodule Modbux.Tcp.Server do
         {:ok, pid} =
           Server.Supervisor.start_child(state.sup_pid, Server.Handler, [
             socket,
-            state.model_pid,
+            {state.model_handler, state.model_pid},
             state.parent_pid
           ])
 
